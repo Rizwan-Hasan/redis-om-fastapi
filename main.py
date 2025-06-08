@@ -22,24 +22,21 @@ You can also get a list of all customer PKs:
     $ curl "http://localhost:8000/customers"
     {"customers":["01FM2G8EP38AVMH7PMTAJ123TA"]}
 """
-
 import datetime
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Optional
 
-import aioredis
-
 from fastapi import FastAPI, HTTPException
-from starlette.requests import Request
-from starlette.responses import Response
-
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
 from fastapi_cache.decorator import cache
-
 from pydantic import EmailStr
-
-from redis_om.model import HashModel, NotFoundError
+from redis import asyncio as aioredis
 from redis_om.connections import get_redis_connection
+from redis_om.model import HashModel, NotFoundError
+from starlette.requests import Request
+from starlette.responses import Response
 
 # This Redis instance is tuned for durability.
 REDIS_DATA_URL = "redis://localhost:6380"
@@ -63,7 +60,14 @@ class Customer(HashModel):
         database = get_redis_connection(url=REDIS_DATA_URL, decode_responses=True)
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    redis = aioredis.from_url(REDIS_CACHE_URL)
+    FastAPICache.init(RedisBackend(redis), prefix="fastapi-cache")
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/customer")
@@ -86,9 +90,3 @@ async def get_customer(pk: str, request: Request, response: Response):
         return Customer.get(pk)
     except NotFoundError:
         raise HTTPException(status_code=404, detail="Customer not found")
-
-
-@app.on_event("startup")
-async def startup():
-    r = aioredis.from_url(REDIS_CACHE_URL, encoding="utf8", decode_responses=True)
-    FastAPICache.init(RedisBackend(r), prefix="fastapi-cache")
